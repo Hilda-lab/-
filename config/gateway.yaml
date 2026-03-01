@@ -1,0 +1,12 @@
+server:
+  name: "api-gateway"
+  port: "8080"
+  metrics_port: "9090"
+  mode: "debug"
+
+etcd:
+  addr: "127.0.0.1:2379"
+
+jwt:
+  expire: "24h"
+  secret: "seckill_secret" #确保和生成Token的密钥一致，后续改进把密钥写在 docker-compose.yaml 里，通过环境变量注入

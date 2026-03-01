@@ -1,0 +1,8 @@
+POST http://127.0.0.1:8080/order
+Content-Type: application/json
+
+{
+  "user_id": 888,
+  "product_id": 1,
+  "count": 10
+}

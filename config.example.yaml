@@ -1,0 +1,18 @@
+server:
+  name: "seckill-mall"
+  port: "your_port_here"
+  mode: "debug"
+
+mysql:
+  dsn: "root:password@tcp(127.0.0.1:3306)/seckill..."
+
+redis:
+  addr: "localhost:6379"
+  password: "password"
+  db: 0
+
+etcd:
+  addr: "127.0.0.1:2379"
+
+seckill:
+  purchase_limit: 5 #配置限购件数，默认为5

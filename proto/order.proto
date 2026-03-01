@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package order;
+
+//指定生成go代码的目录
+option go_package = "./common/pb;pb";
+
+//下单请求
+message CreateOrderRequest {
+  int64 user_id = 1;
+  int64 product_id = 2;
+  int32 count = 3; // 购买数量
+}
+
+//下单响应
+message CreateOrderResponse {
+  string order_id = 1; // 订单号
+  bool success = 2;
+  string message = 3;
+}
+
+//定义服务
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:latest
+    container_name: redis-seckill
+    ports:
+      - "6379:6379"
+    restart: always
+    command:
+        - redis-server
+        - --requirepass
+        - "123456"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    restart: always
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686"#Web UI
+      - "14268:14268"#HTTP收集端口
+      - "4317:4317"#OTLP gRPC
+      - "4318:4318"#OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: always
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: seckill-prometheus
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: seckill-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
