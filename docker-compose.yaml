@@ -1,6 +1,32 @@
 version: '3.8'
 
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-seckill
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: seckill
+      MYSQL_CHARSET: utf8mb4
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data:/var/lib/mysql
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  etcd:
+    image: bitnami/etcd:latest
+    container_name: etcd-seckill
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+    restart: always
+
   redis:
     image: redis:latest
     container_name: redis-seckill
@@ -56,3 +82,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
+
+volumes:
+  mysql_data:
