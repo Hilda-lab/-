@@ -24,6 +24,16 @@ type LoginResponse struct {
 	Msg   string `json:"message"`
 }
 
+type OrderResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		OrderID string `json:"order_id"`
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	} `json:"data"`
+}
+
 func main() {
 	fmt.Printf("开始模拟压测\n")
 	fmt.Printf("总人数: %d, 并发控制: %d, 商品ID: %d\n", TotalRequests, Concurrency, ProductID)
@@ -63,7 +73,12 @@ func main() {
 	}
 
 	wg.Wait()
-	fmt.Printf("\n压测完成，总耗时: %v\n", time.Since(startTime))
+	fmt.Printf("\n========== 压测结果 ==========\n")
+	fmt.Printf("总请求数: %d\n", TotalRequests)
+	fmt.Printf("成功: %d\n", successCount)
+	fmt.Printf("失败: %d\n", failCount)
+	fmt.Printf("总耗时: %v\n", time.Since(startTime))
+	fmt.Printf("==============================\n")
 }
 
 // 登录动作
@@ -92,6 +107,13 @@ func login(uid int) (string, error) {
 	return res.Token, nil
 }
 
+// 统计变量
+var (
+	successCount int
+	failCount    int
+	countMutex   sync.Mutex
+)
+
 // 下单动作
 func createOrder(uid int, token string) {
 	reqBody := map[string]interface{}{
@@ -109,16 +131,35 @@ func createOrder(uid int, token string) {
 	resp, err := client.Do(req)
 
 	if err != nil {
-		fmt.Printf("[用户 %d] 请求超时/错误\n", uid)
+		fmt.Printf("[用户 %d] 请求超时/错误: %v\n", uid, err)
+		countMutex.Lock()
+		failCount++
+		countMutex.Unlock()
 		return
 	}
 	defer resp.Body.Close()
 
-	// 简单打印结果
-	if resp.StatusCode == 200 {
-		// 为了控制台干净点，只打印成功的
-		fmt.Printf("[用户 %d] 抢购成功\n", uid)
+	body, _ := io.ReadAll(resp.Body)
+
+	var res OrderResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		fmt.Printf("[用户 %d] 解析响应失败: %v\n", uid, err)
+		countMutex.Lock()
+		failCount++
+		countMutex.Unlock()
+		return
+	}
+
+	// 根据业务返回判断真正的成功/失败
+	if res.Code == 200 && res.Data.Success {
+		fmt.Printf("[用户 %d] 抢购成功 ✓ (订单号: %s)\n", uid, res.Data.OrderID)
+		countMutex.Lock()
+		successCount++
+		countMutex.Unlock()
 	} else {
-		fmt.Printf("[用户 %d] 失败: %d\n", uid, resp.StatusCode)
+		fmt.Printf("[用户 %d] 抢购失败 ✗ (%s)\n", uid, res.Data.Message)
+		countMutex.Lock()
+		failCount++
+		countMutex.Unlock()
 	}
 }
