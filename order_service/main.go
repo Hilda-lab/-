@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -49,9 +50,54 @@ type OrderMessage struct {
 
 var productClient pb.ProductServiceClient
 var mqChannel *amqp.Channel //全局MQ通道
+var mqConn *amqp.Connection
+var orderSeq uint64
 
 type server struct {
 	pb.UnimplementedOrderServiceServer
+}
+
+func generateOrderID() string {
+	seq := atomic.AddUint64(&orderSeq, 1)
+	return fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), os.Getpid(), seq)
+}
+
+func publishOrderMessage(ctx context.Context, body []byte) error {
+	err := mqChannel.PublishWithContext(ctx,
+		"",            //默认交换机
+		MQ_QUEUE_NAME, //队列名
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		},
+	)
+	if err == nil {
+		return nil
+	}
+
+	log.Printf("MQ发布失败，尝试重连后重试: %v", err)
+	if errConn := connectMQ(); errConn != nil {
+		return fmt.Errorf("MQ重连失败: %w", errConn)
+	}
+
+	err = mqChannel.PublishWithContext(ctx,
+		"",
+		MQ_QUEUE_NAME,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("MQ重试发布失败: %w", err)
+	}
+
+	log.Printf("MQ重连后发布成功")
+	return nil
 }
 
 // CreateOrder 下单逻辑 (异步版)
@@ -83,7 +129,7 @@ func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 	}
 
 	totalAmount := pResp.Price * float32(req.Count)
-	orderID := fmt.Sprintf("%d%d", time.Now().UnixNano(), rand.Intn(1000))
+	orderID := generateOrderID()
 
 	orderMsg := OrderMessage{
 		OrderID:   orderID,
@@ -94,17 +140,8 @@ func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 
 	body, _ := json.Marshal(orderMsg)
 
-	// 发送消息到 RabbitMQ
-	err = mqChannel.PublishWithContext(ctx,
-		"",            //默认交换机
-		MQ_QUEUE_NAME, //队列名
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        body,
-		},
-	)
+	// 发送消息到 RabbitMQ（带重连重试）
+	err = publishOrderMessage(ctx, body)
 
 	//发MQ失败应该回滚Redis库存，这里先打日志
 	if err != nil {
@@ -156,14 +193,28 @@ func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 
 // 初始化RabbitMQ连接
 func initMQ() {
-	conn, err := amqp.Dial(MQ_URL)
+	err := connectMQ()
 	if err != nil {
 		log.Fatalf("连接RabbitMQ失败: %v", err)
 	}
 
-	mqChannel, err = conn.Channel()
+	fmt.Println("已连接到 RabbitMQ (MQ Ready)")
+}
+
+func connectMQ() error {
+	if mqConn != nil && !mqConn.IsClosed() {
+		_ = mqConn.Close()
+	}
+
+	conn, err := amqp.Dial(MQ_URL)
 	if err != nil {
-		log.Fatalf("创建MQ通道失败: %v", err)
+		return err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return err
 	}
 
 	args := amqp.Table{
@@ -171,7 +222,7 @@ func initMQ() {
 		"x-dead-letter-routing-key": DeadRoutingKey, // 带什么暗号发？
 	}
 
-	_, err = mqChannel.QueueDeclare(
+	_, err = ch.QueueDeclare(
 		MQ_QUEUE_NAME,
 		true, //持久化确保重启后队列还在
 		false,
@@ -180,10 +231,14 @@ func initMQ() {
 		args,
 	)
 	if err != nil {
-		log.Fatalf("声明队列失败: %v", err)
+		_ = ch.Close()
+		_ = conn.Close()
+		return err
 	}
 
-	fmt.Println("已连接到 RabbitMQ (MQ Ready)")
+	mqConn = conn
+	mqChannel = ch
+	return nil
 }
 
 // 初始化Product Client

@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -25,23 +27,23 @@ const (
 )
 
 // 初始化队列系统
-func setupQueue(ch *amqp.Channel) amqp.Queue {
+func setupQueue(ch *amqp.Channel) (amqp.Queue, error) {
 	//声明死信交换机
 	err := ch.ExchangeDeclare(DeadExchange, "direct", true, false, false, false, nil)
 	if err != nil {
-		log.Fatalf("无法声明死信交换机： %v", err)
+		return amqp.Queue{}, fmt.Errorf("无法声明死信交换机: %w", err)
 	}
 
 	//声明死信队列
 	_, err = ch.QueueDeclare(DeadQueue, true, false, false, false, nil)
 	if err != nil {
-		log.Fatalf("无法声明死信队列： %v", err)
+		return amqp.Queue{}, fmt.Errorf("无法声明死信队列: %w", err)
 	}
 
 	//绑定：死信交换机 -> 死信队列
 	err = ch.QueueBind(DeadQueue, DeadRoutingKey, DeadExchange, false, nil)
 	if err != nil {
-		log.Fatalf("无法绑定死信队列： %v", err)
+		return amqp.Queue{}, fmt.Errorf("无法绑定死信队列: %w", err)
 	}
 
 	//声明主队列（业务队列），并配置它“连接”到死信交换机
@@ -59,11 +61,11 @@ func setupQueue(ch *amqp.Channel) amqp.Queue {
 		args, //把死信参数传进去
 	)
 	if err != nil {
-		log.Fatalf("无法声明主队列(可能参数冲突，请先去后台删除旧队列)： %v", err)
+		return amqp.Queue{}, fmt.Errorf("无法声明主队列(可能参数冲突): %w", err)
 	}
 
 	log.Printf("✅ RabbitMQ 队列结构初始化完成：主队列[%s] -> 死信[%s]", OrderQueue, DeadQueue)
-	return q
+	return q, nil
 }
 
 // 对应数据库结构
@@ -92,92 +94,184 @@ type OrderMessage struct {
 
 var db *gorm.DB
 
+var (
+	metricReceived  uint64
+	metricSuccess   uint64
+	metricDuplicate uint64
+	metricNack      uint64
+	metricInvalid   uint64
+)
+
 func main() {
 	config.InitConfig("mq")
 	initDB()
+	startMetricsReporter()
+	runConsumerLoop()
+}
 
+func runConsumerLoop() {
+	retryDelay := 1 * time.Second
+	maxRetryDelay := 15 * time.Second
+
+	for {
+		err := consumeOnce()
+		if err == nil {
+			retryDelay = 1 * time.Second
+			continue
+		}
+
+		log.Printf("⚠️ 消费循环异常，%v；%s 后重连...", err, retryDelay)
+		time.Sleep(retryDelay)
+
+		retryDelay *= 2
+		if retryDelay > maxRetryDelay {
+			retryDelay = maxRetryDelay
+		}
+	}
+}
+
+func consumeOnce() error {
 	conn, err := amqp.Dial(MQ_URL)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("连接RabbitMQ失败: %w", err)
 	}
 	defer conn.Close()
 
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("创建MQ通道失败: %w", err)
 	}
 	defer ch.Close()
 
-	// 2. 这里的 Qos 很重要，保证消费者不被撑死
-	ch.Qos(1, 0, false)
+	if err := ch.Qos(1, 0, false); err != nil {
+		return fmt.Errorf("设置Qos失败: %w", err)
+	}
 
-	// 3. 调用 setupQueue 获取配置好 DLQ 的队列对象
-	q := setupQueue(ch)
+	q, err := setupQueue(ch)
+	if err != nil {
+		return err
+	}
 
-	// 4. 监听这个正确的队列
 	msgs, err := ch.Consume(
-		q.Name, // 使用 setupQueue 返回的名字
+		q.Name,
 		"",
-		false, // Auto-Ack 必须为 false
+		false,
 		false,
 		false,
 		false,
 		nil,
 	)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("注册消费者失败: %w", err)
 	}
 
-	fmt.Println("📧 消费者服务已启动 (DLQ版)，等待订单中...")
+	log.Println("📧 消费者服务已启动 (守护重连版)，等待订单中...")
 
-	forever := make(chan struct{})
+	closeErrCh := make(chan *amqp.Error, 1)
+	conn.NotifyClose(closeErrCh)
 
+	for {
+		select {
+		case d, ok := <-msgs:
+			if !ok {
+				return errors.New("消息通道关闭")
+			}
+			handleDelivery(d)
+		case closeErr := <-closeErrCh:
+			if closeErr == nil {
+				return errors.New("RabbitMQ连接关闭")
+			}
+			return fmt.Errorf("RabbitMQ连接关闭: %v", closeErr)
+		}
+	}
+}
+
+func handleDelivery(d amqp.Delivery) {
+	atomic.AddUint64(&metricReceived, 1)
+
+	var msg OrderMessage
+	if err := json.Unmarshal(d.Body, &msg); err != nil {
+		log.Printf("❌ 消息格式错误，直接丢弃: %v", err)
+		atomic.AddUint64(&metricInvalid, 1)
+		atomic.AddUint64(&metricNack, 1)
+		_ = d.Nack(false, false)
+		return
+	}
+
+	fmt.Printf("📦 接收订单: %s | 金额：%.2f | 处理中...", msg.OrderID, msg.Amount)
+
+	order := Order{
+		OrderID:   msg.OrderID,
+		UserID:    msg.UserID,
+		ProductID: msg.ProductID,
+		Amount:    msg.Amount,
+		Status:    1,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	err := db.Create(&order).Error
+	if err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") {
+			fmt.Printf(" -> ⚠️ 订单已存在，确认消息\n")
+			atomic.AddUint64(&metricDuplicate, 1)
+			_ = d.Ack(false)
+			return
+		}
+
+		log.Printf(" -> ❌ 落库失败: %v，发送 Nack(不重回队列)->进入死信", err)
+		atomic.AddUint64(&metricNack, 1)
+		_ = d.Nack(false, false)
+		return
+	}
+
+	fmt.Printf(" -> ✅ 落库成功\n")
+	atomic.AddUint64(&metricSuccess, 1)
+	_ = d.Ack(false)
+}
+
+func startMetricsReporter() {
 	go func() {
-		for d := range msgs {
-			var msg OrderMessage
-			if err := json.Unmarshal(d.Body, &msg); err != nil {
-				log.Printf("❌ 消息格式错误，直接丢弃: %v", err)
-				d.Nack(false, false) // 这种一般不需要重试，直接进死信或丢弃
+		interval := 60 * time.Second
+		if strings.EqualFold(config.Conf.Server.Mode, "debug") {
+			interval = 10 * time.Second
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		var lastReceived uint64
+		var lastSuccess uint64
+		var lastDuplicate uint64
+		var lastNack uint64
+		var lastInvalid uint64
+
+		log.Printf("📊 ConsumerStats 已启用，interval=%s（仅计数变化时输出）", interval)
+
+		for range ticker.C {
+			received := atomic.LoadUint64(&metricReceived)
+			success := atomic.LoadUint64(&metricSuccess)
+			duplicate := atomic.LoadUint64(&metricDuplicate)
+			nack := atomic.LoadUint64(&metricNack)
+			invalid := atomic.LoadUint64(&metricInvalid)
+
+			if received == lastReceived &&
+				success == lastSuccess &&
+				duplicate == lastDuplicate &&
+				nack == lastNack &&
+				invalid == lastInvalid {
 				continue
 			}
 
-			fmt.Printf("📦 接收订单: %s | 金额：%.2f | 处理中...", msg.OrderID, msg.Amount)
+			lastReceived = received
+			lastSuccess = success
+			lastDuplicate = duplicate
+			lastNack = nack
+			lastInvalid = invalid
 
-			// 构造数据库对象（适配你的表结构）
-			order := Order{
-				OrderID:   msg.OrderID,
-				UserID:    msg.UserID,
-				ProductID: msg.ProductID,
-				Amount:    msg.Amount,
-				Status:    1, // 已支付/处理中
-			}
-
-			// 模拟业务处理耗时
-			time.Sleep(50 * time.Millisecond)
-
-			// 写入数据库
-			err = db.Create(&order).Error
-			if err != nil {
-				// 场景 A: 重复消费 (幂等性保护)
-				if strings.Contains(err.Error(), "Duplicate entry") {
-					fmt.Printf(" -> ⚠️ 订单已存在，确认消息\n")
-					d.Ack(false)
-				} else {
-					// 场景 B: 真正的故障 (数据库挂了/网络抖动)
-					log.Printf(" -> ❌ 落库失败: %v，发送 Nack(不重回队列)->进入死信", err)
-
-					// 关键点：requeue=false + 配置了死信交换机 = 消息进入死信队列
-					d.Nack(false, false)
-				}
-			} else {
-				// 场景 C: 成功
-				fmt.Printf(" -> ✅ 落库成功\n")
-				d.Ack(false)
-			}
+			log.Printf("📊 ConsumerStats received=%d success=%d duplicate=%d nack=%d invalid=%d", received, success, duplicate, nack, invalid)
 		}
 	}()
-
-	<-forever
 }
 
 func initDB() {
