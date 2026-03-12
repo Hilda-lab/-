@@ -113,20 +113,41 @@ func (s *server) DeductStock(ctx context.Context, req *pb.DeductStockRequest) (*
 	}
 }
 
+// 回滚Lua脚本：原子地回滚库存和用户购买记录
+const ROLLBACK_LUA_SCRIPT = `
+-- 回滚库存
+local stock = redis.call("INCRBY", KEYS[1], ARGV[1])
+
+-- 回滚用户购买记录（如果提供了userId）
+if ARGV[2] and ARGV[2] ~= "" and ARGV[2] ~= "0" then
+	local current = tonumber(redis.call('hget', KEYS[2], ARGV[2])) or 0
+	-- 减少用户购买数量，但不能小于0
+	local new_count = math.max(0, current - tonumber(ARGV[1]))
+	if new_count == 0 then
+		redis.call('hdel', KEYS[2], ARGV[2])  -- 如果购买记录归零，直接删除
+	else
+		redis.call('hset', KEYS[2], ARGV[2], new_count)
+	end
+end
+
+return stock
+`
+
 // 实现 RollbackStock 接口
 func (s *server) RollbackStock(ctx context.Context, req *pb.DeductStockRequest) (*pb.DeductStockResponse, error) {
-	fmt.Printf("[Rollback]收到回滚请求：商品%d, 数量%d\n", req.ProductId, req.Count)
+	fmt.Printf("[Rollback]收到回滚请求：商品%d, 数量%d, 用户%d\n", req.ProductId, req.Count, req.UserId)
 
-	key := "product:stock:" + strconv.FormatInt(req.ProductId, 10)
+	stockKey := "product:stock:" + strconv.FormatInt(req.ProductId, 10)
+	userSetKey := "product:users:" + strconv.FormatInt(req.ProductId, 10)
 
-	//使用Redis的INCRBY原子操作回滚库存
-	err := rdb.IncrBy(ctx, key, int64(req.Count)).Err()
+	// 使用Lua脚本原子回滚库存和用户购买记录
+	val, err := rdb.Eval(ctx, ROLLBACK_LUA_SCRIPT, []string{stockKey, userSetKey}, req.Count, req.UserId).Result()
 	if err != nil {
 		fmt.Printf("X! 回滚失败，CRITICAL ERROR：%v\n", err)
 		return &pb.DeductStockResponse{Success: false, Message: "回滚失败: " + err.Error()}, nil
 	}
 
-	fmt.Printf("回滚成功，库存已恢复\n")
+	fmt.Printf("✅ 回滚成功，库存已恢复为: %v\n", val)
 	return &pb.DeductStockResponse{Success: true, Message: "回滚成功"}, nil
 }
 

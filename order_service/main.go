@@ -110,19 +110,36 @@ func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 	if err != nil {
 		log.Printf("发送MQ失败: %v，正在执行回滚...", err)
 
-		//使用新Context避免因超时导致回滚被取消
-		rollbackCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
+		// 添加重试机制，最多重试3次
+		maxRetries := 3
+		rollbackSuccess := false
+		
+		for i := 0; i < maxRetries; i++ {
+			//使用新Context避免因超时导致回滚被取消
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			
+			_, errRb := productClient.RollbackStock(rollbackCtx, &pb.DeductStockRequest{
+				ProductId: req.ProductId,
+				Count:     req.Count,
+				UserId:    req.UserId, // 传递UserId用于回滚用户购买记录
+			})
+			cancel()
 
-		_, errRb := productClient.RollbackStock(rollbackCtx, &pb.DeductStockRequest{
-			ProductId: req.ProductId,
-			Count:     req.Count,
-		})
+			if errRb == nil {
+				log.Printf("✅ 库存回滚成功 (重试次数: %d)", i+1)
+				rollbackSuccess = true
+				break
+			} else {
+				log.Printf("⚠️ 回滚失败，重试中... (第%d次, 错误: %v)", i+1, errRb)
+				if i < maxRetries-1 {
+					time.Sleep(time.Duration(i+1) * 500 * time.Millisecond) // 指数退避
+				}
+			}
+		}
 
-		if errRb != nil {
-			log.Printf("X! MQ发送失败且回滚库存失败，请人工介入，CRITICAL ERROR: %v", errRb)
-		} else {
-			log.Printf("库存回滚成功")
+		if !rollbackSuccess {
+			log.Printf("❌ CRITICAL: MQ发送失败且回滚库存失败，请人工介入！商品ID: %d, 数量: %d, 用户ID: %d", 
+				req.ProductId, req.Count, req.UserId)
 		}
 
 		return nil, fmt.Errorf("系统繁忙，请稍后重试")

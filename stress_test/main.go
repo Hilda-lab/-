@@ -12,7 +12,7 @@ import (
 
 // 配置
 const (
-	BaseURL       = "http://127.0.0.1:8080"
+	BaseURL       = "http://127.0.0.1:18080"
 	TotalRequests = 200 // 总共模拟多少人抢购 (想抢光100件，建议设为200或更多)
 	Concurrency   = 50  // 限制同时有多少个请求在跑(控制并发度，防止本机端口耗尽)
 	ProductID     = 1

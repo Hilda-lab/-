@@ -196,6 +196,7 @@ func main() {
 		})
 	})
 
-	fmt.Println("=== API 网关已启动 (Port: 8080) ===")
-	r.Run(":8080")
+	listenAddr := ":" + config.Conf.Server.Port
+	fmt.Printf("=== API 网关已启动 (Port: %s) ===\n", listenAddr)
+	r.Run(listenAddr)
 }

@@ -13,7 +13,7 @@ redis:
   db: 1
 
 etcd:
-  addr: "127.0.0.1:2379"
+  addr: "127.0.0.1:23790"
 
 seckill:
   purchase_limit: 5 #配置限购件数

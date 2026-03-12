@@ -1,11 +1,11 @@
 server:
   name: "api-gateway"
-  port: "8080"
+  port: "18080"
   metrics_port: "9090"
   mode: "debug"
 
 etcd:
-  addr: "127.0.0.1:2379"
+  addr: "127.0.0.1:23790"
 
 jwt:
   expire: "24h"
