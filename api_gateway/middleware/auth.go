@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"net/http"
-	"seckill-mall/common/utils"
+	"seckill-system/common/utils"
 	"strings"
 
 	"github.com/gin-gonic/gin"

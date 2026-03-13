@@ -1,5 +1,5 @@
 server:
-  name: "seckill-mall"
+  name: "秒杀系统"
   port: "your_port_here"
   mode: "debug"
 

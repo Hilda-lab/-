@@ -52,7 +52,7 @@ var Conf *Config
 func InitConfig(filename string) {
 	viper.AddConfigPath("./config")       // 配置文件夹路径
 	viper.AddConfigPath(".")              // 搜索当前根目录
-	viper.AddConfigPath("./seckill-mall") // 防止在子目录下运行找不到
+	viper.AddConfigPath("./seckill-system") // 防止在子目录下运行找不到
 
 	viper.SetConfigName(filename) // 动态文件名
 	viper.SetConfigType("yaml")   // 文件格式

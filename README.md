@@ -1,4 +1,4 @@
-# seckill-mall（Go 微服务秒杀系统）
+# 秒杀系统
 
 基于 Go 的秒杀示例项目，采用 **API Gateway + gRPC 微服务 + Redis + RabbitMQ + MySQL + Etcd** 架构，核心目标是：
 

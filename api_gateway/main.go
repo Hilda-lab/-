@@ -15,13 +15,13 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	resolver "go.etcd.io/etcd/client/v3/naming/resolver"
 
-	"seckill-mall/common/config"
-	"seckill-mall/common/pb"
-	"seckill-mall/common/tracer"
+	"seckill-system/common/config"
+	"seckill-system/common/pb"
+	"seckill-system/common/tracer"
 
-	"seckill-mall/api_gateway/middleware"
+	"seckill-system/api_gateway/middleware"
 
-	"seckill-mall/common/utils"
+	"seckill-system/common/utils"
 
 	sentinel "github.com/alibaba/sentinel-golang/api"
 	"github.com/alibaba/sentinel-golang/core/flow"

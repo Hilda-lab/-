@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"seckill-mall/common/config"
+	"seckill-system/common/config"
 	"strconv"
 
 	"github.com/spf13/viper"
@@ -18,12 +18,12 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/naming/endpoints"
 
-	"seckill-mall/common/pb"
+	"seckill-system/common/pb"
 
 	// 引入 Redis 库
 	"github.com/redis/go-redis/v9"
 
-	"seckill-mall/common/tracer"
+	"seckill-system/common/tracer"
 
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

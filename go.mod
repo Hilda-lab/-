@@ -1,4 +1,4 @@
-module seckill-mall
+module seckill-system
 
 go 1.25.0
 

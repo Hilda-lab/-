@@ -20,9 +20,9 @@ import (
 	"go.etcd.io/etcd/client/v3/naming/endpoints"
 	resolver "go.etcd.io/etcd/client/v3/naming/resolver"
 
-	"seckill-mall/common/config"
-	"seckill-mall/common/pb"
-	"seckill-mall/common/tracer"
+	"seckill-system/common/config"
+	"seckill-system/common/pb"
+	"seckill-system/common/tracer"
 
 	"net/http"
 
